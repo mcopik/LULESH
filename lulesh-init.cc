@@ -277,7 +277,7 @@ Domain::SetupThreadSupportStructures()
    Index_t numthreads = 1;
 #endif
 
-  if (numthreads > 1) {
+  //if (numthreads > 1) {
     // set up node-centered indexing of elements 
     Index_t *nodeElemCount = new Index_t[numNode()] ;
 
@@ -333,7 +333,7 @@ Domain::SetupThreadSupportStructures()
     }
 
     delete [] nodeElemCount ;
-  }
+  //}
 }
 
 

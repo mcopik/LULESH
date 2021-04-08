@@ -288,7 +288,6 @@ void InitStressTermsForElems(Domain &domain,
 }
 
 /******************************************/
-
 static inline
 void CalcElemShapeFunctionDerivatives( Real_t const x[],
                                        Real_t const y[],
@@ -373,6 +372,122 @@ void CalcElemShapeFunctionDerivatives( Real_t const x[],
   b[2][5] = -b[2][3];
   b[2][6] = -b[2][0];
   b[2][7] = -b[2][1];
+
+  /* calculate jacobian determinant (volume) */
+  *volume = Real_t(8.) * ( fjxet * cjxet + fjyet * cjyet + fjzet * cjzet);
+}
+
+static inline
+void CalcElemShapeFunctionDerivatives_faas( Real_t const x[],
+                                       Real_t const y[],
+                                       Real_t const z[],
+                                       //Real_t b[][8],
+                                       Real_t* b,
+                                       Real_t* const volume )
+{
+  const Real_t x0 = x[0] ;   const Real_t x1 = x[1] ;
+  const Real_t x2 = x[2] ;   const Real_t x3 = x[3] ;
+  const Real_t x4 = x[4] ;   const Real_t x5 = x[5] ;
+  const Real_t x6 = x[6] ;   const Real_t x7 = x[7] ;
+
+  const Real_t y0 = y[0] ;   const Real_t y1 = y[1] ;
+  const Real_t y2 = y[2] ;   const Real_t y3 = y[3] ;
+  const Real_t y4 = y[4] ;   const Real_t y5 = y[5] ;
+  const Real_t y6 = y[6] ;   const Real_t y7 = y[7] ;
+
+  const Real_t z0 = z[0] ;   const Real_t z1 = z[1] ;
+  const Real_t z2 = z[2] ;   const Real_t z3 = z[3] ;
+  const Real_t z4 = z[4] ;   const Real_t z5 = z[5] ;
+  const Real_t z6 = z[6] ;   const Real_t z7 = z[7] ;
+
+  Real_t fjxxi, fjxet, fjxze;
+  Real_t fjyxi, fjyet, fjyze;
+  Real_t fjzxi, fjzet, fjzze;
+  Real_t cjxxi, cjxet, cjxze;
+  Real_t cjyxi, cjyet, cjyze;
+  Real_t cjzxi, cjzet, cjzze;
+
+  fjxxi = Real_t(.125) * ( (x6-x0) + (x5-x3) - (x7-x1) - (x4-x2) );
+  fjxet = Real_t(.125) * ( (x6-x0) - (x5-x3) + (x7-x1) - (x4-x2) );
+  fjxze = Real_t(.125) * ( (x6-x0) + (x5-x3) + (x7-x1) + (x4-x2) );
+
+  fjyxi = Real_t(.125) * ( (y6-y0) + (y5-y3) - (y7-y1) - (y4-y2) );
+  fjyet = Real_t(.125) * ( (y6-y0) - (y5-y3) + (y7-y1) - (y4-y2) );
+  fjyze = Real_t(.125) * ( (y6-y0) + (y5-y3) + (y7-y1) + (y4-y2) );
+
+  fjzxi = Real_t(.125) * ( (z6-z0) + (z5-z3) - (z7-z1) - (z4-z2) );
+  fjzet = Real_t(.125) * ( (z6-z0) - (z5-z3) + (z7-z1) - (z4-z2) );
+  fjzze = Real_t(.125) * ( (z6-z0) + (z5-z3) + (z7-z1) + (z4-z2) );
+
+  /* compute cofactors */
+  cjxxi =    (fjyet * fjzze) - (fjzet * fjyze);
+  cjxet =  - (fjyxi * fjzze) + (fjzxi * fjyze);
+  cjxze =    (fjyxi * fjzet) - (fjzxi * fjyet);
+
+  cjyxi =  - (fjxet * fjzze) + (fjzet * fjxze);
+  cjyet =    (fjxxi * fjzze) - (fjzxi * fjxze);
+  cjyze =  - (fjxxi * fjzet) + (fjzxi * fjxet);
+
+  cjzxi =    (fjxet * fjyze) - (fjyet * fjxze);
+  cjzet =  - (fjxxi * fjyze) + (fjyxi * fjxze);
+  cjzze =    (fjxxi * fjyet) - (fjyxi * fjxet);
+
+  /* calculate partials :
+     this need only be done for l = 0,1,2,3   since , by symmetry ,
+     (6,7,4,5) = - (0,1,2,3) .
+  */
+  //b[0][0] =   -  cjxxi  -  cjxet  -  cjxze;
+  //b[0][1] =      cjxxi  -  cjxet  -  cjxze;
+  //b[0][2] =      cjxxi  +  cjxet  -  cjxze;
+  //b[0][3] =   -  cjxxi  +  cjxet  -  cjxze;
+  //b[0][4] = -b[0][2];
+  //b[0][5] = -b[0][3];
+  //b[0][6] = -b[0][0];
+  //b[0][7] = -b[0][1];
+
+  //b[1][0] =   -  cjyxi  -  cjyet  -  cjyze;
+  //b[1][1] =      cjyxi  -  cjyet  -  cjyze;
+  //b[1][2] =      cjyxi  +  cjyet  -  cjyze;
+  //b[1][3] =   -  cjyxi  +  cjyet  -  cjyze;
+  //b[1][4] = -b[1][2];
+  //b[1][5] = -b[1][3];
+  //b[1][6] = -b[1][0];
+  //b[1][7] = -b[1][1];
+
+  //b[2][0] =   -  cjzxi  -  cjzet  -  cjzze;
+  //b[2][1] =      cjzxi  -  cjzet  -  cjzze;
+  //b[2][2] =      cjzxi  +  cjzet  -  cjzze;
+  //b[2][3] =   -  cjzxi  +  cjzet  -  cjzze;
+  //b[2][4] = -b[2][2];
+  //b[2][5] = -b[2][3];
+  //b[2][6] = -b[2][0];
+  //b[2][7] = -b[2][1];
+  b[0] =   -  cjxxi  -  cjxet  -  cjxze;
+  b[1] =      cjxxi  -  cjxet  -  cjxze;
+  b[2] =      cjxxi  +  cjxet  -  cjxze;
+  b[3] =   -  cjxxi  +  cjxet  -  cjxze;
+  b[4] = -b[2];
+  b[5] = -b[3];
+  b[6] = -b[0];
+  b[7] = -b[1];
+
+  b[8] =   -  cjyxi  -  cjyet  -  cjyze;
+  b[8+1] =      cjyxi  -  cjyet  -  cjyze;
+  b[8+2] =      cjyxi  +  cjyet  -  cjyze;
+  b[8+3] =   -  cjyxi  +  cjyet  -  cjyze;
+  b[8+4] = -b[8+2];
+  b[8+5] = -b[8+3];
+  b[8+6] = -b[8+0];
+  b[8+7] = -b[8+1];
+
+  b[16+0] =   -  cjzxi  -  cjzet  -  cjzze;
+  b[16+1] =      cjzxi  -  cjzet  -  cjzze;
+  b[16+2] =      cjzxi  +  cjzet  -  cjzze;
+  b[16+3] =   -  cjzxi  +  cjzet  -  cjzze;
+  b[16+4] = -b[16+2];
+  b[16+5] = -b[16+3];
+  b[16+6] = -b[16+0];
+  b[16+7] = -b[16+1];
 
   /* calculate jacobian determinant (volume) */
   *volume = Real_t(8.) * ( fjxet * cjxet + fjyet * cjyet + fjzet * cjzet);
@@ -491,6 +606,20 @@ void SumElemStressesToNodeForces( const Real_t B[][8],
    }
 }
 
+static inline
+void SumElemStressesToNodeForces_faas( const Real_t* B,
+                                  const Real_t stress_xx,
+                                  const Real_t stress_yy,
+                                  const Real_t stress_zz,
+                                  Real_t fx[], Real_t fy[], Real_t fz[] )
+{
+   for(Index_t i = 0; i < 8; i++) {
+      fx[i] = -( stress_xx * B[i] );
+      fy[i] = -( stress_yy * B[i+8]  );
+      fz[i] = -( stress_zz * B[i+16] );
+   }
+}
+
 /******************************************/
 
 static inline
@@ -513,16 +642,65 @@ void IntegrateStressForElems( Domain &domain,
    Real_t fz_local[8] ;
 
 
-  if (numthreads > 1) {
+  //if (numthreads > 1) {
      fx_elem = Allocate<Real_t>(numElem8) ;
      fy_elem = Allocate<Real_t>(numElem8) ;
      fz_elem = Allocate<Real_t>(numElem8) ;
-  }
+  //}
   // loop over all elements
+
+  float split_factor = 0.6;
+  int iters_local = std::ceil(numElem * split_factor);
+  int iters_remote = numElem - iters_local;
+
+  {
+    // NEW INPUT
+    Real_t* x_local = new Real_t[8*iters_remote];
+    Real_t* y_local = new Real_t[8*iters_remote];
+    Real_t* z_local = new Real_t[8*iters_remote];
+    // NEW OUTPUT - MEMCPY
+    Real_t* send_determ = new Real_t[iters_remote];
+    // NEW OUTPUT 
+    Real_t* B = new Real_t[24*iters_remote];
+
+    for( Index_t k=0; k<iters_remote; ++k )
+    {
+      const Index_t* const elemToNode = domain.nodelist(k + iters_local);
+      // get nodal coordinates from global arrays and copy into local arrays.
+      CollectDomainNodesToElemNodes(domain, elemToNode, &x_local[8*k], &y_local[8*k], &z_local[8*k]);
+    }
+
+    for( Index_t k=0; k<iters_remote; ++k ) {
+      // now invoke
+      // Volume calculation involves extra work for numerical consistency
+      CalcElemShapeFunctionDerivatives_faas(&x_local[8*k], &y_local[8*k], &z_local[8*k],
+                                           &B[24*k], &send_determ[k]);
+
+      CalcElemNodeNormals( &B[24*k] , &B[24*k+8], &B[24*k+16],
+                            &x_local[8*k], &y_local[8*k], &z_local[8*k]);
+    }
+
+    // RETURN
+    // MEMCPY - remove when we have rdmalib::Buffer integrates
+    memcpy(&determ[iters_local], send_determ, sizeof(Real_t) * iters_remote);
+    for( Index_t k=iters_local; k<numElem; ++k ) {
+       SumElemStressesToNodeForces_faas( &B[24*(k-iters_local)], sigxx[k], sigyy[k], sigzz[k],
+                                    &fx_elem[k*8],
+                                    &fy_elem[k*8],
+                                    &fz_elem[k*8] ) ;
+    }
+
+    delete[] B;
+    delete[] send_determ;
+    delete[] x_local;
+    delete[] y_local;
+    delete[] z_local;
+    
+  }
 
   auto start = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for firstprivate(numElem)
-  for( Index_t k=0 ; k<numElem ; ++k )
+  for( Index_t k=0 ; k<iters_local; ++k )
   {
     const Index_t* const elemToNode = domain.nodelist(k);
     Real_t B[3][8] ;// shape function derivatives
@@ -540,32 +718,32 @@ void IntegrateStressForElems( Domain &domain,
     CalcElemNodeNormals( B[0] , B[1], B[2],
                           x_local, y_local, z_local );
 
-    if (numthreads > 1) {
+    //if (numthreads > 1) {
        // Eliminate thread writing conflicts at the nodes by giving
        // each element its own copy to write to
        SumElemStressesToNodeForces( B, sigxx[k], sigyy[k], sigzz[k],
                                     &fx_elem[k*8],
                                     &fy_elem[k*8],
                                     &fz_elem[k*8] ) ;
-    }
-    else {
-       SumElemStressesToNodeForces( B, sigxx[k], sigyy[k], sigzz[k],
-                                    fx_local, fy_local, fz_local ) ;
+    //}
+    //else {
+    //   SumElemStressesToNodeForces( B, sigxx[k], sigyy[k], sigzz[k],
+    //                                fx_local, fy_local, fz_local ) ;
 
-       // copy nodal force contributions to global force arrray.
-       for( Index_t lnode=0 ; lnode<8 ; ++lnode ) {
-          Index_t gnode = elemToNode[lnode];
-          domain.fx(gnode) += fx_local[lnode];
-          domain.fy(gnode) += fy_local[lnode];
-          domain.fz(gnode) += fz_local[lnode];
-       }
-    }
+    //   // copy nodal force contributions to global force arrray.
+    //   for( Index_t lnode=0 ; lnode<8 ; ++lnode ) {
+    //      Index_t gnode = elemToNode[lnode];
+    //      domain.fx(gnode) += fx_local[lnode];
+    //      domain.fy(gnode) += fy_local[lnode];
+    //      domain.fz(gnode) += fz_local[lnode];
+    //   }
+    //}
   }
   auto end = std::chrono::high_resolution_clock::now();
   auto time = std::chrono::duration_cast<std::chrono::microseconds>(end-start).count();
   func_measurement += time;
 
-  if (numthreads > 1) {
+  //if (numthreads > 1) {
      // If threaded, then we need to copy the data out of the temporary
      // arrays used above into the final forces field
 #pragma omp parallel for firstprivate(numNode)
@@ -589,7 +767,7 @@ void IntegrateStressForElems( Domain &domain,
      Release(&fz_elem) ;
      Release(&fy_elem) ;
      Release(&fx_elem) ;
-  }
+  //}
 }
 
 /******************************************/
