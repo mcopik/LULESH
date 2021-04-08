@@ -170,6 +170,8 @@ Additional BSD Notice
 
 /* Work Routines */
 long func_measurement;
+long wait_measurement;
+long submit_measurement;
 std::unique_ptr<rfaas::executor> executor;
 std::unique_ptr<rdmalib::Buffer<Real_t>> input;
 std::unique_ptr<rdmalib::Buffer<Real_t>> output;
@@ -658,30 +660,34 @@ void IntegrateStressForElems( Domain &domain,
   //}
   // loop over all elements
 
+  auto start2 = std::chrono::high_resolution_clock::now();
   float split_factor = 0.6;
   int iters_local = std::ceil(numElem * split_factor);
   int iters_remote = numElem - iters_local;
   
+  Real_t* x_local = input->data();
+  Real_t* y_local = input->data() + 8*iters_remote;
+  Real_t* z_local = input->data() + 16*iters_remote;
+  // NEW OUTPUT - MEMCPY
+  Real_t* send_determ = output->data();
+  // NEW OUTPUT 
+  Real_t* B = output->data() + iters_remote;
+  for( Index_t k=0; k<iters_remote; ++k )
   {
-    Real_t* x_local = input->data();
-    Real_t* y_local = input->data() + 8*iters_remote;
-    Real_t* z_local = input->data() + 16*iters_remote;
-    // NEW OUTPUT - MEMCPY
-    Real_t* send_determ = output->data();
-    // NEW OUTPUT 
-    Real_t* B = output->data() + iters_remote;
-    for( Index_t k=0; k<iters_remote; ++k )
-    {
-      const Index_t* const elemToNode = domain.nodelist(k + iters_local);
-      // get nodal coordinates from global arrays and copy into local arrays.
-      CollectDomainNodesToElemNodes(domain, elemToNode, &x_local[8*k], &y_local[8*k], &z_local[8*k]);
-    }
+    const Index_t* const elemToNode = domain.nodelist(k + iters_local);
+    // get nodal coordinates from global arrays and copy into local arrays.
+    CollectDomainNodesToElemNodes(domain, elemToNode, &x_local[8*k], &y_local[8*k], &z_local[8*k]);
+  }
+  executor->async("empty", *input, *output);
+  auto end2 = std::chrono::high_resolution_clock::now();
+  auto time2 = std::chrono::duration_cast<std::chrono::microseconds>(end2-start2).count();
+  submit_measurement += time2;
 
     //printf("Ptr %pdata %p\n", input->ptr(), input->data());
     //printf("First in vals %f %f %f %f of %d\n", input->data()[0], input->data()[1], input->data()[2], input->data()[3], input->bytes());
 
     // Invoke
-    executor->execute("empty", *input, *output);
+    //executor->execute("empty", *input, *output);
     //printf("First vals %f %f %f %f of %d\n", output->data()[0], output->data()[1], output->data()[2], output->data()[3], input->bytes());
     //for( Index_t k=0; k<iters_remote; ++k ) {
     //  if(k==0) {
@@ -711,17 +717,6 @@ void IntegrateStressForElems( Domain &domain,
     //                        &x_local[8*k], &y_local[8*k], &z_local[8*k]);
     //}
     //printf("First vals %f %f %f %f of %d\n", output->data()[0], output->data()[1], output->data()[2], output->data()[3], input->bytes());
-
-    // RETURN
-    // MEMCPY - remove when we have rdmalib::Buffer integrates
-    memcpy(&determ[iters_local], send_determ, sizeof(Real_t) * iters_remote);
-    for( Index_t k=iters_local; k<numElem; ++k ) {
-       SumElemStressesToNodeForces_faas( &B[24*(k-iters_local)], sigxx[k], sigyy[k], sigzz[k],
-                                    &fx_elem[k*8],
-                                    &fy_elem[k*8],
-                                    &fz_elem[k*8] ) ;
-    }
-  }
 
   //{
   //  // NEW INPUT
@@ -809,6 +804,20 @@ void IntegrateStressForElems( Domain &domain,
     //   }
     //}
   }
+  auto start3 = std::chrono::high_resolution_clock::now();
+  executor->block();
+  // RETURN
+  // MEMCPY - remove when we have rdmalib::Buffer integrates
+  memcpy(&determ[iters_local], send_determ, sizeof(Real_t) * iters_remote);
+  for( Index_t k=iters_local; k<numElem; ++k ) {
+     SumElemStressesToNodeForces_faas( &B[24*(k-iters_local)], sigxx[k], sigyy[k], sigzz[k],
+                                  &fx_elem[k*8],
+                                  &fy_elem[k*8],
+                                  &fz_elem[k*8] ) ;
+  }
+  auto end3 = std::chrono::high_resolution_clock::now();
+  auto time3 = std::chrono::duration_cast<std::chrono::microseconds>(end3-start3).count();
+  wait_measurement += time2;
   auto end = std::chrono::high_resolution_clock::now();
   auto time = std::chrono::duration_cast<std::chrono::microseconds>(end-start).count();
   func_measurement += time;
@@ -2909,6 +2918,8 @@ int main(int argc, char *argv[])
    struct cmdLineOpts opts;
 
    func_measurement = 0;
+   wait_measurement = 0;
+   submit_measurement = 0;
 
 #if USE_MPI   
    Domain_member fieldData ;
@@ -3080,7 +3091,9 @@ int main(int argc, char *argv[])
       VerifyAndWriteFinalOutput(elapsed_timeG, *locDom, opts.nx, numRanks);
    }
    int iters = locDom->cycle();
-  std::cout << ("Rank: " + std::to_string(myRank) + " , loop iters: " + std::to_string(opts.nx*opts.nx*opts.nx) + " , reps: " + std::to_string(iters) + " time per iter [us]: " + std::to_string(func_measurement/(1.0*iters))) << '\n';
+  std::cout << ("Rank: " + std::to_string(myRank) + " , loop iters: " + std::to_string(opts.nx*opts.nx*opts.nx) + " , reps: " + std::to_string(iters) + " func time per iter [us]: " + std::to_string(func_measurement/(1.0*iters))) << '\n';
+  std::cout << ("Rank: " + std::to_string(myRank) + " , loop iters: " + std::to_string(opts.nx*opts.nx*opts.nx) + " , reps: " + std::to_string(iters) + " wait time per iter [us]: " + std::to_string(wait_measurement/(1.0*iters))) << '\n';
+  std::cout << ("Rank: " + std::to_string(myRank) + " , loop iters: " + std::to_string(opts.nx*opts.nx*opts.nx) + " , reps: " + std::to_string(iters) + " submit time per iter [us]: " + std::to_string(submit_measurement/(1.0*iters))) << '\n';
 
    delete locDom; 
 
