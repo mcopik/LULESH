@@ -42,6 +42,11 @@ if (WITH_SILO)
   endif()
 endif()
 
+include_directories("/users/mcopik/projects/rdma/repo/repo2/rdmalib/include")
+include_directories("/users/mcopik/projects/rdma/repo/repo2/rfaas/include")
+include_directories("/users/mcopik/projects/rdma/repo/build_repo2/_deps/cereal-src/include")
+include_directories("/users/mcopik/projects/fbacode/fba_results/sources/gabime_spdlog/include")
+
 set(LULESH_SOURCES
   lulesh-comm.cc
   lulesh-init.cc
@@ -53,3 +58,8 @@ set(LULESH_EXEC lulesh2.0)
 
 add_executable(${LULESH_EXEC} ${LULESH_SOURCES})
 target_link_libraries(${LULESH_EXEC} ${LULESH_EXTERNAL_LIBS})
+target_link_libraries(${LULESH_EXEC} dl)
+target_link_libraries(${LULESH_EXEC} "/users/mcopik/projects/rdma/repo/build_repo2/librdmalib.a")
+target_link_libraries(${LULESH_EXEC} "/users/mcopik/projects/rdma/repo/build_repo2/librfaaslib.a")
+target_link_libraries(${LULESH_EXEC} "/usr/lib64/librdmacm.so")
+target_link_libraries(${LULESH_EXEC} "/usr/lib64/libibverbs.so")

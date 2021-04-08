@@ -162,8 +162,14 @@ Additional BSD Notice
 
 #include "lulesh.h"
 
+#include <unistd.h>
+
+#include <rfaas/executor.hpp>
+#include <rfaas/resources.hpp>
+
 /* Work Routines */
 long func_measurement;
+std::unique_ptr<rfaas::executor> executor;
 
 static inline
 void TimeIncrement(Domain& domain)
@@ -2864,6 +2870,39 @@ int main(int argc, char *argv[])
    myRank = 0;
 #endif   
 
+  const char* env_hostname = std::getenv("HOSTNAME");
+  const char* env_servers = std::getenv("SERVERS_DB");
+  const char* env_flib = std::getenv("FLIB");
+  std::map<std::string, const char*> hosts{
+    {"ault01.cscs.ch", "148.187.105.11"},
+    {"ault02.cscs.ch", "148.187.105.12"},
+    {"ault03.cscs.ch", "148.187.105.13"},
+    {"ault04.cscs.ch", "148.187.105.14"}
+  };
+  char hostname[32];
+  gethostname(hostname, 32);
+  const char* my_ip = hosts.at(hostname);
+  std::cout << ("Rank " + std::to_string(myRank) + " executing on " + std::string{hostname} + ", with ip " + my_ip + ", port " + std::to_string(10001 + myRank) + ", using servers db: " + env_servers + ", flib: " + env_flib) << '\n';
+  std::ifstream in_cfg(env_servers);
+  rfaas::servers::deserialize(in_cfg);
+  in_cfg.close();
+  rfaas::servers & cfg = rfaas::servers::instance();
+  auto begin = std::chrono::high_resolution_clock::now();
+  executor.reset(
+    new rfaas::executor(
+      my_ip,
+      //"148.187.105.11",
+      10001 + myRank,
+      32,
+      128
+    )
+  );
+  executor->allocate(env_flib, 1, 1024, 0, false);
+  auto end = std::chrono::high_resolution_clock::now();
+  auto time_passed = std::chrono::duration_cast<std::chrono::microseconds>(end-begin).count();
+  std::cout << ("Rank: " + std::to_string(myRank) + " allocated exec in [usec] " + std::to_string(time_passed)) << '\n';
+  fflush(stdout);
+
    /* Set defaults that can be overridden by command line opts */
    opts.its = 9999999;
    opts.nx  = 30;
@@ -2971,6 +3010,12 @@ int main(int argc, char *argv[])
   std::cout << ("Rank: " + std::to_string(myRank) + " , loop iters: " + std::to_string(opts.nx*opts.nx*opts.nx) + " , reps: " + std::to_string(iters) + " time per iter [us]: " + std::to_string(func_measurement/(1.0*iters))) << '\n';
 
    delete locDom; 
+
+    begin = std::chrono::high_resolution_clock::now();
+    executor->deallocate();
+    end = std::chrono::high_resolution_clock::now();
+    time_passed = std::chrono::duration_cast<std::chrono::microseconds>(end-begin).count();
+    std::cout << ("Rank: " + std::to_string(myRank) + " deallocated exec in [usec] " + std::to_string(time_passed)) << '\n';
 
 #if USE_MPI
    MPI_Finalize() ;
