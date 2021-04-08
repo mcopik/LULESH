@@ -661,18 +661,15 @@ void IntegrateStressForElems( Domain &domain,
   float split_factor = 0.6;
   int iters_local = std::ceil(numElem * split_factor);
   int iters_remote = numElem - iters_local;
-
+  
   {
-    executor->execute("empty", *input, *output);
-    // NEW INPUT
-    Real_t* x_local = new Real_t[8*iters_remote];
-    Real_t* y_local = new Real_t[8*iters_remote];
-    Real_t* z_local = new Real_t[8*iters_remote];
+    Real_t* x_local = input->data();
+    Real_t* y_local = input->data() + 8*iters_remote;
+    Real_t* z_local = input->data() + 16*iters_remote;
     // NEW OUTPUT - MEMCPY
-    Real_t* send_determ = new Real_t[iters_remote];
+    Real_t* send_determ = output->data();
     // NEW OUTPUT 
-    Real_t* B = new Real_t[24*iters_remote];
-
+    Real_t* B = output->data() + iters_remote;
     for( Index_t k=0; k<iters_remote; ++k )
     {
       const Index_t* const elemToNode = domain.nodelist(k + iters_local);
@@ -680,15 +677,40 @@ void IntegrateStressForElems( Domain &domain,
       CollectDomainNodesToElemNodes(domain, elemToNode, &x_local[8*k], &y_local[8*k], &z_local[8*k]);
     }
 
-    for( Index_t k=0; k<iters_remote; ++k ) {
-      // now invoke
-      // Volume calculation involves extra work for numerical consistency
-      CalcElemShapeFunctionDerivatives_faas(&x_local[8*k], &y_local[8*k], &z_local[8*k],
-                                           &B[24*k], &send_determ[k]);
+    //printf("Ptr %pdata %p\n", input->ptr(), input->data());
+    //printf("First in vals %f %f %f %f of %d\n", input->data()[0], input->data()[1], input->data()[2], input->data()[3], input->bytes());
 
-      CalcElemNodeNormals( &B[24*k] , &B[24*k+8], &B[24*k+16],
-                            &x_local[8*k], &y_local[8*k], &z_local[8*k]);
-    }
+    // Invoke
+    executor->execute("empty", *input, *output);
+    //printf("First vals %f %f %f %f of %d\n", output->data()[0], output->data()[1], output->data()[2], output->data()[3], input->bytes());
+    //for( Index_t k=0; k<iters_remote; ++k ) {
+    //  if(k==0) {
+    //    printf("First vals y %f %f %f %f %f %f %f %f of %d\n", x_local[0], x_local[1], x_local[2], x_local[3], x_local[4], x_local[5], x_local[6], x_local[7]);
+    //    printf("First vals y %f %f %f %f %f %f %f %f of %d\n", y_local[0], y_local[1], y_local[2], y_local[3], y_local[4], y_local[5], y_local[6], y_local[7]);
+    //    printf("First vals y %f %f %f %f %f %f %f %f of %d\n", z_local[0], z_local[1], z_local[2], z_local[3], z_local[4], z_local[5], z_local[6], z_local[7]);
+    //  printf("Print B ");
+    //  for(int j = 0; j < 24; ++j)
+    //    printf("%f ",B[j]);
+    //  printf("\n");
+    //  }
+    //  if(k==0)
+    //    printf("out %p send %p val %f\n", output->data(), &send_determ[k], send_determ[k]);
+    //  // now invoke
+    //  // Volume calculation involves extra work for numerical consistency
+    //  CalcElemShapeFunctionDerivatives_faas(&x_local[8*k], &y_local[8*k], &z_local[8*k],
+    //                                       &B[24*k], &send_determ[k]);
+    //  if(k==0) {
+    //  printf("Print B %p %p %d", B, output->data(), iters_remote);
+    //  for(int j = 0; j < 24; ++j)
+    //    printf("%f ",B[j]);
+    //  printf("\n");
+    //    printf("out %p send %p val %d\n", output->data(), &send_determ[k], send_determ[k]);
+    //  }
+
+    //  CalcElemNodeNormals( &B[24*k] , &B[24*k+8], &B[24*k+16],
+    //                        &x_local[8*k], &y_local[8*k], &z_local[8*k]);
+    //}
+    //printf("First vals %f %f %f %f of %d\n", output->data()[0], output->data()[1], output->data()[2], output->data()[3], input->bytes());
 
     // RETURN
     // MEMCPY - remove when we have rdmalib::Buffer integrates
@@ -699,14 +721,52 @@ void IntegrateStressForElems( Domain &domain,
                                     &fy_elem[k*8],
                                     &fz_elem[k*8] ) ;
     }
-
-    delete[] B;
-    delete[] send_determ;
-    delete[] x_local;
-    delete[] y_local;
-    delete[] z_local;
-    
   }
+
+  //{
+  //  // NEW INPUT
+  //  Real_t* x_local = new Real_t[8*iters_remote];
+  //  Real_t* y_local = new Real_t[8*iters_remote];
+  //  Real_t* z_local = new Real_t[8*iters_remote];
+  //  // NEW OUTPUT - MEMCPY
+  //  Real_t* send_determ = new Real_t[iters_remote];
+  //  // NEW OUTPUT 
+  //  Real_t* B = new Real_t[24*iters_remote];
+
+  //  for( Index_t k=0; k<iters_remote; ++k )
+  //  {
+  //    const Index_t* const elemToNode = domain.nodelist(k + iters_local);
+  //    // get nodal coordinates from global arrays and copy into local arrays.
+  //    CollectDomainNodesToElemNodes(domain, elemToNode, &x_local[8*k], &y_local[8*k], &z_local[8*k]);
+  //  }
+
+  //  for( Index_t k=0; k<iters_remote; ++k ) {
+  //    // now invoke
+  //    // Volume calculation involves extra work for numerical consistency
+  //    CalcElemShapeFunctionDerivatives_faas(&x_local[8*k], &y_local[8*k], &z_local[8*k],
+  //                                         &B[24*k], &send_determ[k]);
+
+  //    CalcElemNodeNormals( &B[24*k] , &B[24*k+8], &B[24*k+16],
+  //                          &x_local[8*k], &y_local[8*k], &z_local[8*k]);
+  //  }
+
+  //  // RETURN
+  //  // MEMCPY - remove when we have rdmalib::Buffer integrates
+  //  memcpy(&determ[iters_local], send_determ, sizeof(Real_t) * iters_remote);
+  //  for( Index_t k=iters_local; k<numElem; ++k ) {
+  //     SumElemStressesToNodeForces_faas( &B[24*(k-iters_local)], sigxx[k], sigyy[k], sigzz[k],
+  //                                  &fx_elem[k*8],
+  //                                  &fy_elem[k*8],
+  //                                  &fz_elem[k*8] ) ;
+  //  }
+
+  //  delete[] B;
+  //  delete[] send_determ;
+  //  delete[] x_local;
+  //  delete[] y_local;
+  //  delete[] z_local;
+  //  
+  //}
 
   auto start = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for firstprivate(numElem)
@@ -2923,6 +2983,7 @@ int main(int argc, char *argv[])
     output.reset(new rdmalib::Buffer<Real_t>{(3*8 + 1)*iters_remote});
     input->register_memory(executor->_state.pd(), IBV_ACCESS_LOCAL_WRITE);
     output->register_memory(executor->_state.pd(), IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+    std::cout << ("Rank " + std::to_string(myRank) + " allocted " + std::to_string(3*8*iters_remote) + " bytes") << '\n';
     auto end = std::chrono::high_resolution_clock::now();
     auto time_passed = std::chrono::duration_cast<std::chrono::microseconds>(end-begin).count();
     std::cout << ("Rank: " + std::to_string(myRank) + " allocated exec in [usec] " + std::to_string(time_passed)) << '\n';

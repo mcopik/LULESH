@@ -8,12 +8,46 @@ typedef Int4_t  Index_t ; // array subscript and loop index
 typedef double       real8 ;
 typedef real8   Real_t ;  // floating point representation
 
+static void CalcElemShapeFunctionDerivatives_faas( Real_t const x[],
+                                       Real_t const y[],
+                                       Real_t const z[],
+                                       //Real_t b[][8],
+                                       Real_t* b,
+                                       Real_t* const volume );
+static void CalcElemNodeNormals(Real_t pfx[8],
+                         Real_t pfy[8],
+                         Real_t pfz[8],
+                         const Real_t x[8],
+                         const Real_t y[8],
+                         const Real_t z[8]);
+
 extern "C" uint32_t empty(void* args, uint32_t size, void* res)
 {
-  printf("Execute with size of input %d\n", size);
-  int* src = static_cast<int*>(args), *dest = static_cast<int*>(res);
-  *dest = *src;
-  return size;
+  int iters_remote = size / 24 / 8;
+  //printf("Execute with size of input %d, iters %d, first val %f\n", size, remote_iters, static_cast<double*>(args)[1]);
+  double* d_args = reinterpret_cast<double*>(args);
+  double* o_args = reinterpret_cast<double*>(res);
+  //printf("First vals %f %f %f %f of %d and %d iters\n", d_args[0], d_args[1], d_args[2], d_args[3], size, iters_remote);
+  //int* src = static_cast<int*>(args), *dest = static_cast<int*>(res);
+  //*dest = *src;
+  Real_t* x_local = d_args;
+  Real_t* y_local = d_args + 8*iters_remote;
+  Real_t* z_local = d_args + 16*iters_remote;
+  //// NEW OUTPUT - MEMCPY
+  Real_t* send_determ = o_args;
+  //// NEW OUTPUT 
+  Real_t* B = o_args + iters_remote;
+  for( Index_t k=0; k<iters_remote; ++k ) {
+    // now invoke
+    // Volume calculation involves extra work for numerical consistency
+    CalcElemShapeFunctionDerivatives_faas(&x_local[8*k], &y_local[8*k], &z_local[8*k],
+                                         &B[24*k], &send_determ[k]);
+
+    CalcElemNodeNormals( &B[24*k] , &B[24*k+8], &B[24*k+16],
+                          &x_local[8*k], &y_local[8*k], &z_local[8*k]);
+  }
+  //printf("First vals %f %f %f %f, write %d\n", o_args[0], o_args[1], o_args[2], o_args[3], size + iters_remote * 8);
+  return size + iters_remote * 8;
 }
 
 static inline
