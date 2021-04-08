@@ -164,12 +164,15 @@ Additional BSD Notice
 
 #include <unistd.h>
 
+#include <rdmalib/functions.hpp>
 #include <rfaas/executor.hpp>
 #include <rfaas/resources.hpp>
 
 /* Work Routines */
 long func_measurement;
 std::unique_ptr<rfaas::executor> executor;
+std::unique_ptr<rdmalib::Buffer<Real_t>> input;
+std::unique_ptr<rdmalib::Buffer<Real_t>> output;
 
 static inline
 void TimeIncrement(Domain& domain)
@@ -660,6 +663,7 @@ void IntegrateStressForElems( Domain &domain,
   int iters_remote = numElem - iters_local;
 
   {
+    executor->execute("empty", *input, *output);
     // NEW INPUT
     Real_t* x_local = new Real_t[8*iters_remote];
     Real_t* y_local = new Real_t[8*iters_remote];
@@ -2870,39 +2874,6 @@ int main(int argc, char *argv[])
    myRank = 0;
 #endif   
 
-  const char* env_hostname = std::getenv("HOSTNAME");
-  const char* env_servers = std::getenv("SERVERS_DB");
-  const char* env_flib = std::getenv("FLIB");
-  std::map<std::string, const char*> hosts{
-    {"ault01.cscs.ch", "148.187.105.11"},
-    {"ault02.cscs.ch", "148.187.105.12"},
-    {"ault03.cscs.ch", "148.187.105.13"},
-    {"ault04.cscs.ch", "148.187.105.14"}
-  };
-  char hostname[32];
-  gethostname(hostname, 32);
-  const char* my_ip = hosts.at(hostname);
-  std::cout << ("Rank " + std::to_string(myRank) + " executing on " + std::string{hostname} + ", with ip " + my_ip + ", port " + std::to_string(10001 + myRank) + ", using servers db: " + env_servers + ", flib: " + env_flib) << '\n';
-  std::ifstream in_cfg(env_servers);
-  rfaas::servers::deserialize(in_cfg);
-  in_cfg.close();
-  rfaas::servers & cfg = rfaas::servers::instance();
-  auto begin = std::chrono::high_resolution_clock::now();
-  executor.reset(
-    new rfaas::executor(
-      my_ip,
-      //"148.187.105.11",
-      10001 + myRank,
-      32,
-      128
-    )
-  );
-  executor->allocate(env_flib, 1, 1024, 0, false);
-  auto end = std::chrono::high_resolution_clock::now();
-  auto time_passed = std::chrono::duration_cast<std::chrono::microseconds>(end-begin).count();
-  std::cout << ("Rank: " + std::to_string(myRank) + " allocated exec in [usec] " + std::to_string(time_passed)) << '\n';
-  fflush(stdout);
-
    /* Set defaults that can be overridden by command line opts */
    opts.its = 9999999;
    opts.nx  = 30;
@@ -2915,6 +2886,47 @@ int main(int argc, char *argv[])
    opts.cost = 1;
 
    ParseCommandLineOptions(argc, argv, myRank, &opts);
+
+    const char* env_hostname = std::getenv("HOSTNAME");
+    const char* env_servers = std::getenv("SERVERS_DB");
+    const char* env_flib = std::getenv("FLIB");
+    std::map<std::string, const char*> hosts{
+      {"ault01.cscs.ch", "148.187.105.11"},
+      {"ault02.cscs.ch", "148.187.105.12"},
+      {"ault03.cscs.ch", "148.187.105.13"},
+      {"ault04.cscs.ch", "148.187.105.14"}
+    };
+    char hostname[32];
+    gethostname(hostname, 32);
+    const char* my_ip = hosts.at(hostname);
+    std::cout << ("Rank " + std::to_string(myRank) + " executing on " + std::string{hostname} + ", with ip " + my_ip + ", port " + std::to_string(10001 + myRank) + ", using servers db: " + env_servers + ", flib: " + env_flib) << '\n';
+    std::ifstream in_cfg(env_servers);
+    rfaas::servers::deserialize(in_cfg);
+    in_cfg.close();
+    rfaas::servers & cfg = rfaas::servers::instance();
+    auto begin = std::chrono::high_resolution_clock::now();
+    executor.reset(
+      new rfaas::executor(
+        my_ip,
+        //"148.187.105.11",
+        10001 + myRank,
+        32,
+        128
+      )
+    );
+    float split_factor = 0.6;
+    int numElem = opts.nx*opts.nx*opts.nx;
+    int iters_local = std::ceil(numElem * split_factor);
+    int iters_remote = numElem - iters_local;
+    executor->allocate(env_flib, 1, sizeof(Real_t)*25*iters_remote, 0, false);
+    input.reset(new rdmalib::Buffer<Real_t>{3*8*iters_remote, rdmalib::functions::Submission::DATA_HEADER_SIZE});
+    output.reset(new rdmalib::Buffer<Real_t>{(3*8 + 1)*iters_remote});
+    input->register_memory(executor->_state.pd(), IBV_ACCESS_LOCAL_WRITE);
+    output->register_memory(executor->_state.pd(), IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+    auto end = std::chrono::high_resolution_clock::now();
+    auto time_passed = std::chrono::duration_cast<std::chrono::microseconds>(end-begin).count();
+    std::cout << ("Rank: " + std::to_string(myRank) + " allocated exec in [usec] " + std::to_string(time_passed)) << '\n';
+    fflush(stdout);
 
    if ((myRank == 0) && (opts.quiet == 0)) {
       std::cout << "Running problem size " << opts.nx << "^3 per domain until completion\n";
@@ -3012,6 +3024,8 @@ int main(int argc, char *argv[])
    delete locDom; 
 
     begin = std::chrono::high_resolution_clock::now();
+    input.reset();
+    output.reset();
     executor->deallocate();
     end = std::chrono::high_resolution_clock::now();
     time_passed = std::chrono::duration_cast<std::chrono::microseconds>(end-begin).count();
