@@ -144,6 +144,7 @@ Additional BSD Notice
 
 */
 
+#include <chrono>
 #include <climits>
 #include <vector>
 #include <math.h>
@@ -162,6 +163,7 @@ Additional BSD Notice
 #include "lulesh.h"
 
 /* Work Routines */
+long func_measurement;
 
 static inline
 void TimeIncrement(Domain& domain)
@@ -518,6 +520,7 @@ void IntegrateStressForElems( Domain &domain,
   }
   // loop over all elements
 
+  auto start = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for firstprivate(numElem)
   for( Index_t k=0 ; k<numElem ; ++k )
   {
@@ -558,6 +561,9 @@ void IntegrateStressForElems( Domain &domain,
        }
     }
   }
+  auto end = std::chrono::high_resolution_clock::now();
+  auto time = std::chrono::duration_cast<std::chrono::microseconds>(end-start).count();
+  func_measurement += time;
 
   if (numthreads > 1) {
      // If threaded, then we need to copy the data out of the temporary
@@ -2654,6 +2660,8 @@ int main(int argc, char *argv[])
    int myRank ;
    struct cmdLineOpts opts;
 
+   func_measurement = 0;
+
 #if USE_MPI   
    Domain_member fieldData ;
    
@@ -2781,6 +2789,8 @@ int main(int argc, char *argv[])
    if ((myRank == 0) && (opts.quiet == 0)) {
       VerifyAndWriteFinalOutput(elapsed_timeG, *locDom, opts.nx, numRanks);
    }
+   int iters = locDom->cycle();
+  std::cout << ("Rank: " + std::to_string(myRank) + " , loop iters: " + std::to_string(opts.nx*opts.nx*opts.nx) + " , reps: " + std::to_string(iters) + " time per iter [us]: " + std::to_string(func_measurement/(1.0*iters))) << '\n';
 
    delete locDom; 
 
