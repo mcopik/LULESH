@@ -170,6 +170,10 @@ Additional BSD Notice
 
 /* Work Routines */
 long func_measurement;
+long func_counter;
+long func2_local1;
+long func2_remote;
+long func2_local2;
 long wait_measurement;
 long wait_measurement2;
 long submit_measurement;
@@ -766,54 +770,81 @@ void IntegrateStressForElems( Domain &domain,
   //}
 
   auto start = std::chrono::high_resolution_clock::now();
-#pragma omp parallel for firstprivate(numElem)
-  for( Index_t k=0 ; k<iters_local; ++k )
+//#pragma omp parallel for firstprivate(numElem)
+#pragma omp parallel
   {
-    const Index_t* const elemToNode = domain.nodelist(k);
-    Real_t B[3][8] ;// shape function derivatives
-    Real_t x_local[8] ;
-    Real_t y_local[8] ;
-    Real_t z_local[8] ;
+    #pragma omp for
+    for( Index_t k=0 ; k<iters_local; ++k )
+    {
+      const Index_t* const elemToNode = domain.nodelist(k);
+      Real_t B[3][8] ;// shape function derivatives
+      Real_t x_local[8] ;
+      Real_t y_local[8] ;
+      Real_t z_local[8] ;
 
-    // get nodal coordinates from global arrays and copy into local arrays.
-    CollectDomainNodesToElemNodes(domain, elemToNode, x_local, y_local, z_local);
+      // get nodal coordinates from global arrays and copy into local arrays.
+      CollectDomainNodesToElemNodes(domain, elemToNode, x_local, y_local, z_local);
 
-    // Volume calculation involves extra work for numerical consistency
-    CalcElemShapeFunctionDerivatives(x_local, y_local, z_local,
-                                         B, &determ[k]);
+      // Volume calculation involves extra work for numerical consistency
+      CalcElemShapeFunctionDerivatives(x_local, y_local, z_local,
+                                           B, &determ[k]);
 
-    CalcElemNodeNormals( B[0] , B[1], B[2],
-                          x_local, y_local, z_local );
+      CalcElemNodeNormals( B[0] , B[1], B[2],
+                            x_local, y_local, z_local );
 
-    //if (numthreads > 1) {
-       // Eliminate thread writing conflicts at the nodes by giving
-       // each element its own copy to write to
-       SumElemStressesToNodeForces( B, sigxx[k], sigyy[k], sigzz[k],
-                                    &fx_elem[k*8],
-                                    &fy_elem[k*8],
-                                    &fz_elem[k*8] ) ;
+      //if (numthreads > 1) {
+         // Eliminate thread writing conflicts at the nodes by giving
+         // each element its own copy to write to
+         SumElemStressesToNodeForces( B, sigxx[k], sigyy[k], sigzz[k],
+                                      &fx_elem[k*8],
+                                      &fy_elem[k*8],
+                                      &fz_elem[k*8] ) ;
+      //}
+      //else {
+      //   SumElemStressesToNodeForces( B, sigxx[k], sigyy[k], sigzz[k],
+      //                                fx_local, fy_local, fz_local ) ;
+
+      //   // copy nodal force contributions to global force arrray.
+      //   for( Index_t lnode=0 ; lnode<8 ; ++lnode ) {
+      //      Index_t gnode = elemToNode[lnode];
+      //      domain.fx(gnode) += fx_local[lnode];
+      //      domain.fy(gnode) += fy_local[lnode];
+      //      domain.fz(gnode) += fz_local[lnode];
+      //   }
+      //}
+    }
+
+    // FIXME: enable for integrated processing
+    //#pragma omp master
+    //{
+    //  auto start3 = std::chrono::high_resolution_clock::now();
+    //  executor->block();
+    //  // RETURN
+    //  // MEMCPY - remove when we have rdmalib::Buffer integrates
+    //  memcpy(&determ[iters_local], send_determ, sizeof(Real_t) * iters_remote);
+    //  auto end3 = std::chrono::high_resolution_clock::now();
+    //  auto time3 = std::chrono::duration_cast<std::chrono::microseconds>(end3-start3).count();
+    //  wait_measurement += time3;
     //}
-    //else {
-    //   SumElemStressesToNodeForces( B, sigxx[k], sigyy[k], sigzz[k],
-    //                                fx_local, fy_local, fz_local ) ;
 
-    //   // copy nodal force contributions to global force arrray.
-    //   for( Index_t lnode=0 ; lnode<8 ; ++lnode ) {
-    //      Index_t gnode = elemToNode[lnode];
-    //      domain.fx(gnode) += fx_local[lnode];
-    //      domain.fy(gnode) += fy_local[lnode];
-    //      domain.fz(gnode) += fz_local[lnode];
-    //   }
+    //#pragma omp for firstprivate(iters_local,numElem)
+    //for( Index_t k=iters_local; k<numElem; ++k ) {
+    //   SumElemStressesToNodeForces_faas( &B[24*(k-iters_local)], sigxx[k], sigyy[k], sigzz[k],
+    //                                &fx_elem[k*8],
+    //                                &fy_elem[k*8],
+    //                                &fz_elem[k*8] ) ;
     //}
+
   }
   auto end = std::chrono::high_resolution_clock::now();
+  // FIXME: separated processing
   auto start3 = std::chrono::high_resolution_clock::now();
   executor->block();
   // RETURN
   // MEMCPY - remove when we have rdmalib::Buffer integrates
   memcpy(&determ[iters_local], send_determ, sizeof(Real_t) * iters_remote);
   auto end3 = std::chrono::high_resolution_clock::now();
-#pragma omp parallel for firstprivate(iters_local,numElem)
+    #pragma omp parallel for firstprivate(iters_local,numElem)
   for( Index_t k=iters_local; k<numElem; ++k ) {
      SumElemStressesToNodeForces_faas( &B[24*(k-iters_local)], sigxx[k], sigyy[k], sigzz[k],
                                   &fx_elem[k*8],
@@ -1274,9 +1305,13 @@ void CalcHourglassControlForElems(Domain& domain,
    Real_t *y8n  = Allocate<Real_t>(numElem8) ;
    Real_t *z8n  = Allocate<Real_t>(numElem8) ;
 
+  int iters_local = std::ceil(numElem * split_factor);
+  int iters_remote = numElem - iters_local;
+
+  auto begin = std::chrono::high_resolution_clock::now();
    /* start loop over elements */
 #pragma omp parallel for firstprivate(numElem)
-   for (Index_t i=0 ; i<numElem ; ++i){
+   for (Index_t i=0 ; i<iters_local; ++i){
       Real_t  x1[8],  y1[8],  z1[8] ;
       Real_t pfx[8], pfy[8], pfz[8] ;
 
@@ -1308,6 +1343,156 @@ void CalcHourglassControlForElems(Domain& domain,
 #endif
       }
    }
+   // here wait, get results
+  auto end = std::chrono::high_resolution_clock::now();
+  auto time34 = std::chrono::duration_cast<std::chrono::microseconds>(end-begin).count();
+  func2_local1 += time34;
+
+  // NEW OUTPUT 
+  Real_t* x_local = input->data();
+  Real_t* y_local = input->data() + 8*iters_remote;
+  Real_t* z_local = input->data() + 16*iters_remote;
+  Real_t* res_x = output->data();
+  Real_t* res_y = output->data() + 8*iters_remote;
+  Real_t* res_z = output->data() + 16*iters_remote;
+
+//  int myRank;
+//  MPI_Comm_rank(MPI_COMM_WORLD, &myRank);
+//  if(myRank == 0)
+//    printf("Iters local %d remote %d, Buff size %d, Ptrs: %p %p %p, %p %p %p\n",
+//        iters_local, iters_remote, input->size(), x_local, y_local, z_local, res_x, res_y, res_z);
+//
+  auto begin3 = std::chrono::high_resolution_clock::now();
+#pragma omp parallel for firstprivate(numElem)
+   for (Index_t i=iters_local ; i<numElem; ++i){
+      Index_t* elemToNode = domain.nodelist(i);
+      int offset = 8*(i - iters_local);
+      // disable - reuse data
+      //CollectDomainNodesToElemNodes(domain, elemToNode, &x_local[offset], &y_local[offset], &z_local[offset]);
+
+      //if(myRank == 0)
+      //  printf("Iter %d, offset %d\n", i, offset);
+      CalcElemVolumeDerivative(&res_x[offset], &res_y[offset], &res_z[offset], &x_local[offset], &y_local[offset], &z_local[offset]);
+
+   }
+  auto end3 = std::chrono::high_resolution_clock::now();
+  func2_remote += std::chrono::duration_cast<std::chrono::microseconds>(end3-begin3).count();
+
+  func_counter++;
+  auto begin2 = std::chrono::high_resolution_clock::now();
+//#pragma omp parallel for firstprivate(numElem)
+   for (Index_t i=iters_local ; i<numElem; ++i){
+      int offset = 8*(i - iters_local);
+      /* load into temporary storage for FB Hour Glass control */
+      for(Index_t ii=0;ii<8;++ii){
+         Index_t jj=8*i+ii;
+
+         dvdx[jj] = res_x[offset+ii];
+         dvdy[jj] = res_y[offset+ii];
+         dvdz[jj] = res_z[offset+ii];
+         x8n[jj]  = x_local[offset+ii];
+         y8n[jj]  = y_local[offset+ii];
+         z8n[jj]  = z_local[offset+ii];
+      }
+
+      //if(myRank == 0)
+      //  printf("Iter %d check with offset %d\n", i, offset);
+      determ[i] = domain.volo(i) * domain.v(i);
+
+      /* Do a check for negative volumes */
+      if ( domain.v(i) <= Real_t(0.0) ) {
+#if USE_MPI         
+         MPI_Abort(MPI_COMM_WORLD, VolumeError) ;
+#else
+         exit(VolumeError);
+#endif
+      }
+    }
+
+  // REMOTE PART
+//  auto begin2 = std::chrono::high_resolution_clock::now();
+//   /* start loop over elements */
+//#pragma omp parallel for firstprivate(numElem)
+//   for (Index_t i=iters_local ; i<numElem; ++i){
+//      //Real_t  x1[8],  y1[8],  z1[8] ;
+//      Real_t pfx[8], pfy[8], pfz[8] ;
+//
+//      int offset = 8*(i - iters_local);
+//      Index_t* elemToNode = domain.nodelist(i);
+//      //CollectDomainNodesToElemNodes(domain, elemToNode, x1, y1, z1);
+//      CollectDomainNodesToElemNodes(domain, elemToNode, &x_local[offset], &y_local[offset], &z_local[offset]);
+//
+//      //CalcElemVolumeDerivative(pfx, pfy, pfz, x1, y1, z1);
+//      //CalcElemVolumeDerivative(pfx, pfy, pfz, &x_local[offset], &y_local[offset], &z_local[offset]);
+//      CalcElemVolumeDerivative(&res_x[offset], &res_y[offset], &res_z[offset], &x_local[offset], &y_local[offset], &z_local[offset]);
+//
+//      /* load into temporary storage for FB Hour Glass control */
+//      for(Index_t ii=0;ii<8;++ii){
+//         Index_t jj=8*i+ii;
+//
+//         //dvdx[jj] = pfx[ii];
+//         //dvdy[jj] = pfy[ii];
+//         //dvdz[jj] = pfz[ii];
+//         dvdx[jj] = res_x[offset+ii];
+//         dvdy[jj] = res_y[offset+ii];
+//         dvdz[jj] = res_z[offset+ii];
+//         //x8n[jj]  = x1[ii];
+//         //y8n[jj]  = y1[ii];
+//         //z8n[jj]  = z1[ii];
+//         x8n[jj]  = x_local[offset+ii];
+//         y8n[jj]  = y_local[offset+ii];
+//         z8n[jj]  = z_local[offset+ii];
+//      }
+//
+//      determ[i] = domain.volo(i) * domain.v(i);
+//
+//      /* Do a check for negative volumes */
+//      if ( domain.v(i) <= Real_t(0.0) ) {
+//#if USE_MPI         
+//         MPI_Abort(MPI_COMM_WORLD, VolumeError) ;
+//#else
+//         exit(VolumeError);
+//#endif
+//      }
+//   }
+  auto end2 = std::chrono::high_resolution_clock::now();
+  func2_local2 += std::chrono::duration_cast<std::chrono::microseconds>(end2-begin2).count();
+
+
+//   /* start loop over elements */
+//#pragma omp parallel for firstprivate(numElem)
+//   for (Index_t i=0 ; i<numElem ; ++i){
+//      Real_t  x1[8],  y1[8],  z1[8] ;
+//      Real_t pfx[8], pfy[8], pfz[8] ;
+//
+//      Index_t* elemToNode = domain.nodelist(i);
+//      CollectDomainNodesToElemNodes(domain, elemToNode, x1, y1, z1);
+//
+//      CalcElemVolumeDerivative(pfx, pfy, pfz, x1, y1, z1);
+//
+//      /* load into temporary storage for FB Hour Glass control */
+//      for(Index_t ii=0;ii<8;++ii){
+//         Index_t jj=8*i+ii;
+//
+//         dvdx[jj] = pfx[ii];
+//         dvdy[jj] = pfy[ii];
+//         dvdz[jj] = pfz[ii];
+//         x8n[jj]  = x1[ii];
+//         y8n[jj]  = y1[ii];
+//         z8n[jj]  = z1[ii];
+//      }
+//
+//      determ[i] = domain.volo(i) * domain.v(i);
+//
+//      /* Do a check for negative volumes */
+//      if ( domain.v(i) <= Real_t(0.0) ) {
+//#if USE_MPI         
+//         MPI_Abort(MPI_COMM_WORLD, VolumeError) ;
+//#else
+//         exit(VolumeError);
+//#endif
+//      }
+//   }
 
    if ( hgcoef > Real_t(0.) ) {
       CalcFBHourglassForceForElems( domain,
@@ -2924,6 +3109,8 @@ int main(int argc, char *argv[])
    struct cmdLineOpts opts;
 
    func_measurement = 0;
+   func2_local1 = func2_local2 = func2_remote = 0;
+   func_counter = 0;
    wait_measurement = 0;
    wait_measurement2 = 0;
    submit_measurement = 0;
@@ -3109,7 +3296,12 @@ int main(int argc, char *argv[])
    int iters = locDom->cycle();
   std::cout << ("Rank: " + std::to_string(myRank) + " , loop iters: " + std::to_string(opts.nx*opts.nx*opts.nx) + " , reps: " + std::to_string(iters) + " func time " + std::to_string(func_measurement) + " per iter [us]: " + std::to_string(func_measurement/(1.0*iters))) << '\n';
   std::cout << ("Rank: " + std::to_string(myRank) + " , loop iters: " + std::to_string(opts.nx*opts.nx*opts.nx) + " , reps: " + std::to_string(iters) + " wait time per iter [us]: " + std::to_string(wait_measurement/(1.0*iters))) << '\n';
-  std::cout << ("Rank: " + std::to_string(myRank) + " , loop iters: " + std::to_string(opts.nx*opts.nx*opts.nx) + " , reps: " + std::to_string(iters) + " wait time 2 per iter [us]: " + std::to_string(wait_measurement2/(1.0*iters))) << '\n';
+  //std::cout << ("Rank: " + std::to_string(myRank) + " , loop iters: " + std::to_string(opts.nx*opts.nx*opts.nx) + " , reps: " + std::to_string(iters) + " func counter: " + std::to_string(func_counter) + " wait time 2 per iter [us]: " + std::to_string(wait_measurement2/(1.0*iters))) << '\n';
+  std::cout << ("Rank: " + std::to_string(myRank) + " , loop iters: " + std::to_string(opts.nx*opts.nx*opts.nx) + " , reps: " + std::to_string(iters) + " func counter: " + std::to_string(func_counter)
+      + " func2 local batch per iter [us]: " + std::to_string(func2_local1/(1.0*iters))
+      + " func2 local2 batch per iter [us]: " + std::to_string(func2_local2/(1.0*iters))
+      + " func2 remote batch per iter [us]: " + std::to_string(func2_remote/(1.0*iters)))
+    << '\n';
   std::cout << ("Rank: " + std::to_string(myRank) + " , loop iters: " + std::to_string(opts.nx*opts.nx*opts.nx) + " , reps: " + std::to_string(iters) + " submit time per iter [us]: " + std::to_string(submit_measurement/(1.0*iters))) << '\n';
 
    delete locDom; 
