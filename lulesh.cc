@@ -171,7 +171,9 @@ Additional BSD Notice
 /* Work Routines */
 long func_measurement;
 long wait_measurement;
+long wait_measurement2;
 long submit_measurement;
+float split_factor;
 std::unique_ptr<rfaas::executor> executor;
 std::unique_ptr<rdmalib::Buffer<Real_t>> input;
 std::unique_ptr<rdmalib::Buffer<Real_t>> output;
@@ -661,7 +663,6 @@ void IntegrateStressForElems( Domain &domain,
   // loop over all elements
 
   auto start2 = std::chrono::high_resolution_clock::now();
-  float split_factor = 0.6;
   int iters_local = std::ceil(numElem * split_factor);
   int iters_remote = numElem - iters_local;
   
@@ -679,6 +680,7 @@ void IntegrateStressForElems( Domain &domain,
     CollectDomainNodesToElemNodes(domain, elemToNode, &x_local[8*k], &y_local[8*k], &z_local[8*k]);
   }
   executor->async("empty", *input, *output);
+  //executor->execute("empty", *input, *output);
   auto end2 = std::chrono::high_resolution_clock::now();
   auto time2 = std::chrono::duration_cast<std::chrono::microseconds>(end2-start2).count();
   submit_measurement += time2;
@@ -804,21 +806,25 @@ void IntegrateStressForElems( Domain &domain,
     //   }
     //}
   }
+  auto end = std::chrono::high_resolution_clock::now();
   auto start3 = std::chrono::high_resolution_clock::now();
   executor->block();
   // RETURN
   // MEMCPY - remove when we have rdmalib::Buffer integrates
   memcpy(&determ[iters_local], send_determ, sizeof(Real_t) * iters_remote);
+  auto end3 = std::chrono::high_resolution_clock::now();
+#pragma omp parallel for firstprivate(iters_local,numElem)
   for( Index_t k=iters_local; k<numElem; ++k ) {
      SumElemStressesToNodeForces_faas( &B[24*(k-iters_local)], sigxx[k], sigyy[k], sigzz[k],
                                   &fx_elem[k*8],
                                   &fy_elem[k*8],
                                   &fz_elem[k*8] ) ;
   }
-  auto end3 = std::chrono::high_resolution_clock::now();
+  auto end34 = std::chrono::high_resolution_clock::now();
   auto time3 = std::chrono::duration_cast<std::chrono::microseconds>(end3-start3).count();
-  wait_measurement += time2;
-  auto end = std::chrono::high_resolution_clock::now();
+  auto time34 = std::chrono::duration_cast<std::chrono::microseconds>(end34-start3).count();
+  wait_measurement += time3;
+  wait_measurement2 += time34;
   auto time = std::chrono::duration_cast<std::chrono::microseconds>(end-start).count();
   func_measurement += time;
 
@@ -2919,6 +2925,7 @@ int main(int argc, char *argv[])
 
    func_measurement = 0;
    wait_measurement = 0;
+   wait_measurement2 = 0;
    submit_measurement = 0;
 
 #if USE_MPI   
@@ -2971,9 +2978,15 @@ int main(int argc, char *argv[])
     gethostname(hostname, 32);
     const char* my_ip = hosts.at(hostname);
     std::cout << ("Rank " + std::to_string(myRank) + " executing on " + std::string{hostname} + ", with ip " + my_ip + ", port " + std::to_string(10001 + myRank) + ", using servers db: " + env_servers + ", flib: " + env_flib) << '\n';
-    std::ifstream in_cfg(env_servers);
-    rfaas::servers::deserialize(in_cfg);
-    in_cfg.close();
+    if(myRank < 14) {
+      std::ifstream in_cfg("../servers.json");
+      rfaas::servers::deserialize(in_cfg);
+      in_cfg.close();
+    } else {
+      std::ifstream in_cfg("../servers2.json");
+      rfaas::servers::deserialize(in_cfg);
+      in_cfg.close();
+    }
     rfaas::servers & cfg = rfaas::servers::instance();
     auto begin = std::chrono::high_resolution_clock::now();
     executor.reset(
@@ -2985,11 +2998,14 @@ int main(int argc, char *argv[])
         128
       )
     );
-    float split_factor = 0.6;
+    //float split_factor = 0.6;
+    split_factor = std::stoi( std::getenv("SPLIT_FACTOR") ) / 100.0;
     int numElem = opts.nx*opts.nx*opts.nx;
     int iters_local = std::ceil(numElem * split_factor);
     int iters_remote = numElem - iters_local;
-    executor->allocate(env_flib, 1, sizeof(Real_t)*25*iters_remote, 0, false);
+    printf("Perform work: %d %d %d\n", iters_local, iters_remote, numElem);
+    //executor->allocate(env_flib, 1, sizeof(Real_t)*25*iters_remote, 0, false);
+    executor->allocate(env_flib, 1, sizeof(Real_t)*25*iters_remote, -1, false);
     input.reset(new rdmalib::Buffer<Real_t>{3*8*iters_remote, rdmalib::functions::Submission::DATA_HEADER_SIZE});
     output.reset(new rdmalib::Buffer<Real_t>{(3*8 + 1)*iters_remote});
     input->register_memory(executor->_state.pd(), IBV_ACCESS_LOCAL_WRITE);
@@ -3091,8 +3107,9 @@ int main(int argc, char *argv[])
       VerifyAndWriteFinalOutput(elapsed_timeG, *locDom, opts.nx, numRanks);
    }
    int iters = locDom->cycle();
-  std::cout << ("Rank: " + std::to_string(myRank) + " , loop iters: " + std::to_string(opts.nx*opts.nx*opts.nx) + " , reps: " + std::to_string(iters) + " func time per iter [us]: " + std::to_string(func_measurement/(1.0*iters))) << '\n';
+  std::cout << ("Rank: " + std::to_string(myRank) + " , loop iters: " + std::to_string(opts.nx*opts.nx*opts.nx) + " , reps: " + std::to_string(iters) + " func time " + std::to_string(func_measurement) + " per iter [us]: " + std::to_string(func_measurement/(1.0*iters))) << '\n';
   std::cout << ("Rank: " + std::to_string(myRank) + " , loop iters: " + std::to_string(opts.nx*opts.nx*opts.nx) + " , reps: " + std::to_string(iters) + " wait time per iter [us]: " + std::to_string(wait_measurement/(1.0*iters))) << '\n';
+  std::cout << ("Rank: " + std::to_string(myRank) + " , loop iters: " + std::to_string(opts.nx*opts.nx*opts.nx) + " , reps: " + std::to_string(iters) + " wait time 2 per iter [us]: " + std::to_string(wait_measurement2/(1.0*iters))) << '\n';
   std::cout << ("Rank: " + std::to_string(myRank) + " , loop iters: " + std::to_string(opts.nx*opts.nx*opts.nx) + " , reps: " + std::to_string(iters) + " submit time per iter [us]: " + std::to_string(submit_measurement/(1.0*iters))) << '\n';
 
    delete locDom; 
